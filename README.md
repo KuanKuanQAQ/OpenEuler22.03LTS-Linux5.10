@@ -13,13 +13,12 @@ static char ksym_name[KSYM_NAME_LEN] = "trampolines";
 module_param_string(ksym, ksym_name, KSYM_NAME_LEN, S_IRUGO);
 ```
 
-watchpoint 内核模块初始化时首先定义一个 struct perf_event_attr 对象 attr。其中记载了受监视内存首地址 attr.bp_addr，受监视内存长度 attr.bp_len 以及受监视内存操作 attr.bp_type。struct perf_event_attr 对象并不一定是表示一个 breakpoint 或 watchpoint 事件，hw_breakpoint_init() 函数将其属性初始化为 breakpoint 事件。
+watchpoint 内核模块初始化时首先定义一个 struct perf_event_attr 对象 attr。其中记录了受监视内存首地址 attr.bp_addr，受监视内存长度 attr.bp_len 受监视内存操作 attr.bp_type，以及受监视内存的屏蔽位 attr.bp_mask。struct perf_event_attr 对象并不一定是表示一个 breakpoint 或 watchpoint 事件，hw_breakpoint_init() 函数将其属性初始化为 breakpoint 事件。
 
 ```c
 static int __init watchpoint_init(void)
 {
 	int ret;
-	struct perf_event_attr attr;
 	void *addr = __symbol_get(ksym_name);
 
     printk(KERN_INFO "ksym %s in %p", ksym_name, addr);
@@ -27,6 +26,7 @@ static int __init watchpoint_init(void)
 		return -ENXIO;
 
 	hw_breakpoint_init(&attr);
+	attr.bp_mask = 12;
 	attr.bp_addr = (unsigned long)addr;
 	attr.bp_len = HW_BREAKPOINT_LEN_8;
 	attr.bp_type = HW_BREAKPOINT_W;
@@ -40,6 +40,13 @@ static int __init watchpoint_init(void)
 
 	printk(KERN_INFO "Watchpoint for %s write installed %p\n", ksym_name, addr);
 
+	printk(KERN_INFO "Kernel thread start\n");
+	/* Start worker kthread */
+	kthread = kthread_run(work_func, (void *)addr, "tl_writer");
+	if(kthread == ERR_PTR(-ENOMEM)){
+		pr_err("Could not run kthread\n");
+		return -1;
+	}
 	return 0;
 
 }
@@ -122,8 +129,102 @@ EXPORT_SYMBOL_GPL(trampolines);
 
 并且这个内核模块必须先于 watchpoint.ko 加载。否则 watchpoint.ko 还是找不到 trampolines 这个符号。
 
-## 5. 问题
+## 5. 对内核的修改
+在 arm64 架构下，并没有写入 wcr 控制寄存器的 mask 位，这导致 watchpoint 只能在 1-8 个字节的范围内生效。加入 mask 标志位：
+```c
+// arch/arm64/include/asm/hw_breakpoint.h
+struct arch_hw_breakpoint_ctrl {
+	u32 __reserved	: 19,
+	mask            : 4,  // add
+	len		        : 8,
+	type	    	: 2,
+	privilege	    : 2,
+	enabled		    : 1;
+};
 
+static inline u32 encode_ctrl_reg(struct arch_hw_breakpoint_ctrl ctrl)
+{
+	// u32 val = (ctrl.len << 5) | (ctrl.type << 3) | 
+	// 	(ctrl.privilege << 1) | ctrl.enabled;
+	u32 val = (ctrl.mask << 24) | (ctrl.len << 5) | (ctrl.type << 3) | 
+		(ctrl.privilege << 1) | ctrl.enabled;
+
+	if (is_kernel_in_hyp_mode() && ctrl.privilege == AARCH64_BREAKPOINT_EL1)
+		val |= DBG_HMC_HYP;
+
+	return val;
+}
+```
+
+根据 arm64 的架构参考手册，wcr 的 mask 标志位、 bas 标志位（即 attr->bp_len）和 wvr 的 va 位（即 attr->bp_mask）必须满足一定的关系，否则可能会产生未知的行为。所以在构造 arch_hw_breakpoint_ctrl 的值时检查：
+```c
+// arch/arm64/kernel/hw_breakpoint.c
+	if (attr->bp_mask) {
+		/*
+		 * Mask
+		 */
+		if (attr->bp_mask < 3 || attr->bp_mask > 31) return -EINVAL;
+		if (attr->bp_addr & ((1 << attr->bp_mask) - 1)) return -EINVAL;
+		if (attr->bp_len != HW_BREAKPOINT_LEN_8) return -EINVAL;
+		hw->ctrl.len = ARM_BREAKPOINT_LEN_8;
+		hw->ctrl.mask = attr->bp_mask;
+	}
+```
+
+## 实验记录
+使用不同 mask 的 watchpoint 监视 trampolines 内核符号，此时 watchpoint 的首地址是 trampolines 数组的首地址，监视长度由 mask 决定。从 trampolines 的末端向首端遍历确认 watchpoint 监视的范围。
+
+attr.bp_mask = 11 时，写 511 项（2^11 个字节）触发 watchpoint：
+```
+[    6.154637] 514th entry in trampolines 00000000ef6f0ac1
+[    6.154804] 513th entry in trampolines 000000002b4fb64a
+[    6.154980] 512th entry in trampolines 0000000014c4be8e
+[    6.155152] 511th entry in trampolines 00000000f981f808
+[    6.156205] trampolines value is changed
+[    6.156394] Dump stack from watchpoint_handler
+[    6.156826] CPU: 0 PID: 108 Comm: tl_writer Not tainted 5.10.0+ #3
+[    6.157046] Hardware name: linux,dummy-virt (DT)
+[    6.157459] Call trace:
+[    6.158178]  dump_backtrace+0x0/0x1c0
+[    6.158452]  show_stack+0x18/0x68
+[    6.158616]  dump_stack+0xd4/0x130
+[    6.159271]  watchpoint_handler+0x30/0x48 [watchpoint]
+```
+attr.bp_mask = 10 时，写 255 项（2^10 个字节）触发 watchpoint：
+```
+[    6.137330] 258th entry in trampolines 00000000b18bec2c
+[    6.137511] 257th entry in trampolines 00000000e6b444da
+[    6.137682] 256th entry in trampolines 000000006a693037
+[    6.137868] 255th entry in trampolines 00000000278c1599
+[    6.138854] trampolines value is changed
+[    6.139017] Dump stack from watchpoint_handler
+[    6.139463] CPU: 0 PID: 108 Comm: tl_writer Not tainted 5.10.0+ #3
+[    6.139686] Hardware name: linux,dummy-virt (DT)
+[    6.140097] Call trace:
+[    6.140802]  dump_backtrace+0x0/0x1c0
+[    6.141084]  show_stack+0x18/0x68
+[    6.141255]  dump_stack+0xd4/0x130
+[    6.141906]  watchpoint_handler+0x30/0x48 [watchpoint]
+```
+attr.bp_mask = 9 时，写 127 项（2^9 个字节）触发 watchpoint：
+```
+[    5.481447] 130th entry in trampolines 0000000051c5c5c7
+[    5.481617] 129th entry in trampolines 00000000571d2b9a
+[    5.481890] 128th entry in trampolines 000000009df087de
+[    5.482076] 127th entry in trampolines 0000000050822d64
+[    5.483028] trampolines value is changed
+[    5.483203] Dump stack from watchpoint_handler
+[    5.483642] CPU: 0 PID: 108 Comm: tl_writer Not tainted 5.10.0+ #3
+[    5.483883] Hardware name: linux,dummy-virt (DT)
+[    5.484286] Call trace:
+[    5.484970]  dump_backtrace+0x0/0x1c0
+[    5.485253]  show_stack+0x18/0x68
+[    5.485404]  dump_stack+0xd4/0x130
+[    5.486075]  watchpoint_handler+0x30/0x48 [watchpoint]
+```
+## 7. 问题
+
+### 7.1 中断处理函数中不允许休眠
 第 3 节中创建的内核线程在两次写 trampolines 之间会睡眠一定时间，这引起了内核错误（删除 msleep 睡眠就不会报错）：
 
 ```
@@ -149,4 +250,5 @@ EXPORT_SYMBOL_GPL(trampolines);
 
 但是这个内核线程为什么会被认为是中断处理函数呢？
 
+### 7.2 回调函数
 另一个问题是一旦出现写 trampolines 的操作，就会一直调用回调函数 watchpoint_handler()。尚未确定原因。

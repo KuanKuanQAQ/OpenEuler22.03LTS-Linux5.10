@@ -261,7 +261,9 @@ static int hw_breakpoint_control(struct perf_event *bp,
 	case HW_BREAKPOINT_RESTORE:
 		/* Setup the address register. */
 		write_wb_reg(val_reg, i, info->address);
-
+		printk(KERN_INFO "info->ctrl.len = %d\n", info->ctrl.len);
+		printk(KERN_INFO "info->ctrl.type = %d\n", info->ctrl.type);
+		printk(KERN_INFO "info->ctrl.mask = %d\n", info->ctrl.mask);
 		/* Setup the control register. */
 		ctrl = encode_ctrl_reg(info->ctrl);
 		write_wb_reg(ctrl_reg, i,
@@ -431,54 +433,65 @@ static int arch_build_bp_info(struct perf_event *bp,
 		return -EINVAL;
 	}
 
-	/* Len */
-	switch (attr->bp_len) {
-	case HW_BREAKPOINT_LEN_1:
-		hw->ctrl.len = ARM_BREAKPOINT_LEN_1;
-		break;
-	case HW_BREAKPOINT_LEN_2:
-		hw->ctrl.len = ARM_BREAKPOINT_LEN_2;
-		break;
-	case HW_BREAKPOINT_LEN_3:
-		hw->ctrl.len = ARM_BREAKPOINT_LEN_3;
-		break;
-	case HW_BREAKPOINT_LEN_4:
-		hw->ctrl.len = ARM_BREAKPOINT_LEN_4;
-		break;
-	case HW_BREAKPOINT_LEN_5:
-		hw->ctrl.len = ARM_BREAKPOINT_LEN_5;
-		break;
-	case HW_BREAKPOINT_LEN_6:
-		hw->ctrl.len = ARM_BREAKPOINT_LEN_6;
-		break;
-	case HW_BREAKPOINT_LEN_7:
-		hw->ctrl.len = ARM_BREAKPOINT_LEN_7;
-		break;
-	case HW_BREAKPOINT_LEN_8:
+	if (attr->bp_mask) {
+		/*
+		 * Mask
+		 */
+		if (attr->bp_mask < 3 || attr->bp_mask > 31) return -EINVAL;
+		if (attr->bp_addr & ((1 << attr->bp_mask) - 1)) return -EINVAL;
+		if (attr->bp_len != HW_BREAKPOINT_LEN_8) return -EINVAL;
 		hw->ctrl.len = ARM_BREAKPOINT_LEN_8;
-		break;
-	default:
-		return -EINVAL;
-	}
-
-	/*
-	 * On AArch64, we only permit breakpoints of length 4, whereas
-	 * AArch32 also requires breakpoints of length 2 for Thumb.
-	 * Watchpoints can be of length 1, 2, 4 or 8 bytes.
-	 */
-	if (hw->ctrl.type == ARM_BREAKPOINT_EXECUTE) {
-		if (is_a32_compat_bp(bp)) {
-			if (hw->ctrl.len != ARM_BREAKPOINT_LEN_2 &&
-			    hw->ctrl.len != ARM_BREAKPOINT_LEN_4)
-				return -EINVAL;
-		} else if (hw->ctrl.len != ARM_BREAKPOINT_LEN_4) {
-			/*
-			 * FIXME: Some tools (I'm looking at you perf) assume
-			 *	  that breakpoints should be sizeof(long). This
-			 *	  is nonsense. For now, we fix up the parameter
-			 *	  but we should probably return -EINVAL instead.
-			 */
+		hw->ctrl.mask = attr->bp_mask + 1;
+	} else {
+		/* Len */
+		switch (attr->bp_len) {
+		case HW_BREAKPOINT_LEN_1:
+			hw->ctrl.len = ARM_BREAKPOINT_LEN_1;
+			break;
+		case HW_BREAKPOINT_LEN_2:
+			hw->ctrl.len = ARM_BREAKPOINT_LEN_2;
+			break;
+		case HW_BREAKPOINT_LEN_3:
+			hw->ctrl.len = ARM_BREAKPOINT_LEN_3;
+			break;
+		case HW_BREAKPOINT_LEN_4:
 			hw->ctrl.len = ARM_BREAKPOINT_LEN_4;
+			break;
+		case HW_BREAKPOINT_LEN_5:
+			hw->ctrl.len = ARM_BREAKPOINT_LEN_5;
+			break;
+		case HW_BREAKPOINT_LEN_6:
+			hw->ctrl.len = ARM_BREAKPOINT_LEN_6;
+			break;
+		case HW_BREAKPOINT_LEN_7:
+			hw->ctrl.len = ARM_BREAKPOINT_LEN_7;
+			break;
+		case HW_BREAKPOINT_LEN_8:
+			hw->ctrl.len = ARM_BREAKPOINT_LEN_8;
+			break;
+		default:
+			return -EINVAL;
+		}
+
+		/*
+		* On AArch64, we only permit breakpoints of length 4, whereas
+		* AArch32 also requires breakpoints of length 2 for Thumb.
+		* Watchpoints can be of length 1, 2, 4 or 8 bytes.
+		*/
+		if (hw->ctrl.type == ARM_BREAKPOINT_EXECUTE) {
+			if (is_a32_compat_bp(bp)) {
+				if (hw->ctrl.len != ARM_BREAKPOINT_LEN_2 &&
+					hw->ctrl.len != ARM_BREAKPOINT_LEN_4)
+					return -EINVAL;
+			} else if (hw->ctrl.len != ARM_BREAKPOINT_LEN_4) {
+				/*
+				* FIXME: Some tools (I'm looking at you perf) assume
+				*	  that breakpoints should be sizeof(long). This
+				*	  is nonsense. For now, we fix up the parameter
+				*	  but we should probably return -EINVAL instead.
+				*/
+				hw->ctrl.len = ARM_BREAKPOINT_LEN_4;
+			}
 		}
 	}
 

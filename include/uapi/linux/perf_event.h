@@ -392,6 +392,7 @@ struct perf_event_attr {
 	};
 
 	__u32			bp_type;
+	__u32           bp_mask;
 	union {
 		__u64		bp_addr;
 		__u64		kprobe_func; /* for perf_kprobe */
