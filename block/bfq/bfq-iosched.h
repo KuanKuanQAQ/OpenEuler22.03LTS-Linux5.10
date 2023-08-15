@@ -10,7 +10,14 @@
 #include <linux/hrtimer.h>
 #include <linux/blk-cgroup.h>
 
-#include "blk-cgroup-rwstat.h"
+#include "../blk-cgroup-rwstat.h"
+
+#ifndef SPECIAL_FUNCTION_PROTO
+/* These are for IDE */
+#define SPECIAL_FUNCTION_PROTO(ret, name, args...) ret name (args)
+#define SPECIAL_FUNCTION(ret, name, args...) ret name (args)
+#error "Could not find wrappers"
+#endif
 
 #define BFQ_IOPRIO_CLASSES	3
 #define BFQ_CL_IDLE_TIMEOUT	(HZ/5)

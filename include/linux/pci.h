@@ -43,6 +43,12 @@
 
 #include <linux/pci_ids.h>
 
+struct Rerandom_Driver {
+	const char		   *name;
+	void (*init_entry)(void);
+	void (*check_entry)(void);
+};
+
 #define PCI_STATUS_ERROR_BITS (PCI_STATUS_DETECTED_PARITY  | \
 			       PCI_STATUS_SIG_SYSTEM_ERROR | \
 			       PCI_STATUS_REC_MASTER_ABORT | \

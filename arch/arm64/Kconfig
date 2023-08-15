@@ -2025,6 +2025,17 @@ config RANDOMIZE_MODULE_REGION_FULL
 	  a limited range that contains the [_stext, _etext] interval of the
 	  core kernel, so branch relocations are always in range.
 
+# Reasons for dependencies
+# KALLSYMS_ALL - For preserving symbol table
+# i am not clear about dependencies
+config ARM64_MODULE_RERANDOMIZE
+	bool
+	prompt "Enable ARM64 modules rerandomization"
+	# depends on KALLSYMS_ALL && RANDOMIZE_BASE
+	default y
+	help
+	  Allow runtime rerandomization of modules.
+
 config CC_HAVE_STACKPROTECTOR_SYSREG
 	def_bool $(cc-option,-mstack-protector-guard=sysreg -mstack-protector-guard-reg=sp_el0 -mstack-protector-guard-offset=0)
 

@@ -125,12 +125,13 @@
 #include <linux/delay.h>
 #include <linux/backing-dev.h>
 
-#include "blk.h"
-#include "blk-mq.h"
-#include "blk-mq-tag.h"
-#include "blk-mq-sched.h"
+#include "../blk.h"
+#include "../blk-mq.h"
+#include "../blk-mq-tag.h"
+#include "../blk-mq-sched.h"
+#include "../blk-wbt.h"
+
 #include "bfq-iosched.h"
-#include "blk-wbt.h"
 
 #define BFQ_BFQQ_FNS(name)						\
 void bfq_mark_bfqq_##name(struct bfq_queue *bfqq)			\
@@ -532,7 +533,8 @@ static struct request *bfq_choose_req(struct bfq_data *bfqd,
  * Limit depths of async I/O and sync writes so as to counter both
  * problems.
  */
-static void bfq_limit_depth(unsigned int op, struct blk_mq_alloc_data *data)
+SPECIAL_FUNCTION(void, bfq_limit_depth, unsigned int op, struct blk_mq_alloc_data *data) 
+// static void bfq_limit_depth(unsigned int op, struct blk_mq_alloc_data *data)
 {
 	struct bfq_data *bfqd = data->q->elevator->elevator_data;
 
@@ -6083,7 +6085,8 @@ static struct bfq_queue *bfq_get_bfqq_handle_split(struct bfq_data *bfqd,
  * comments on bfq_init_rq for the reason behind this delayed
  * preparation.
  */
-static void bfq_prepare_request(struct request *rq)
+SPECIAL_FUNCTION(void, bfq_prepare_request, struct request *rq) 
+// static void bfq_prepare_request(struct request *rq)
 {
 	/*
 	 * Regardless of whether we have an icq attached, we have to
@@ -6441,7 +6444,8 @@ static void bfq_init_root_group(struct bfq_group *root_group,
 	root_group->sched_data.bfq_class_idle_last_service = jiffies;
 }
 
-static int bfq_init_queue(struct request_queue *q, struct elevator_type *e)
+SPECIAL_FUNCTION(int, bfq_init_queue, struct request_queue *q, struct elevator_type *e) 
+// static int bfq_init_queue(struct request_queue *q, struct elevator_type *e)
 {
 	struct bfq_data *bfqd;
 	struct elevator_queue *eq;
@@ -6833,6 +6837,7 @@ MODULE_ALIAS("bfq-iosched");
 static int __init bfq_init(void)
 {
 	int ret;
+	printk(KERN_INFO "bfq_init, everything going on...\n");
 
 #ifdef CONFIG_BFQ_GROUP_IOSCHED
 	ret = blkcg_policy_register(&blkcg_policy_bfq);

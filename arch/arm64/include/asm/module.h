@@ -23,6 +23,36 @@ struct mod_arch_specific {
 };
 #endif
 
+#ifdef CONFIG_ARM64_MODULE_RERANDOMIZE
+
+#define __FILENAME__ (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
+#define printp(x) printk("(%s.%03d): " #x " = 0x%lx\n", __FILENAME__, __LINE__, (unsigned long)(x))
+#define INC_BY_DELTA(x, delta) ( x = (typeof((x))) ((unsigned long)(x) + (unsigned long)(delta)) )
+#define _ASM_BL(f)		"bl " #f
+
+#define SPECIAL_FUNCTION_PROTO(ret, name, args...)  \
+	noinline ret __attribute__ ((section (".trampolines.text." #name))) __attribute__((naked)) name(args)
+#define SPECIAL_FUNCTION(ret, name, args...) \
+_Pragma("GCC diagnostic push") \
+_Pragma("GCC diagnostic ignored \"-Wreturn-type\"") \
+_Pragma("GCC diagnostic ignored \"-Wattributes\"") \
+ret __attribute__ ((visibility("hidden"))) name## _ ##real(args);\
+SPECIAL_FUNCTION_PROTO(ret, name, args) {              \
+	asm ("sub sp, sp, #32");                           \
+	asm ("stp x29, x30, [sp, #16]");                   \
+	asm ("add x29, sp, #16");                          \
+	asm (_ASM_BL(name## _ ##real));                    \
+	asm ("stur w0, [x29, #-4]");                       \
+	asm ("ldp x29, x30, [sp, #16]");                   \
+	asm ("add sp, sp, #32");                           \
+} \
+_Pragma("GCC diagnostic pop") \
+ret name## _ ##real(args)
+#else /* !CONFIG_X86_MODULE_RERANDOMIZE */
+#define SPECIAL_FUNCTION_PROTO(ret, name, args...) ret name (args)
+#define SPECIAL_FUNCTION(ret, name, args...) ret name (args)
+#endif /* CONFIG_X86_MODULE_RERANDOMIZE */
+
 u64 module_emit_plt_entry(struct module *mod, Elf64_Shdr *sechdrs,
 			  void *loc, const Elf64_Rela *rela,
 			  Elf64_Sym *sym);

@@ -4321,6 +4321,49 @@ unsigned long shrink_all_memory(unsigned long nr_to_reclaim)
 }
 #endif /* CONFIG_HIBERNATION */
 
+#include <linux/pci.h>
+#include <linux/ktime.h>
+#include <linux/delay.h>
+
+char default_name[] = "default_name";
+void empty_func(void) {
+	printk("This is an empty func.");
+	return;
+}
+struct Rerandom_Driver rerandom_driver = {
+	.name = default_name,
+	.init_entry = empty_func,
+	.check_entry = empty_func,
+};
+
+void register_rerandom_driver(const struct Rerandom_Driver *rerandom_driver_struct) {
+	rerandom_driver.name        = rerandom_driver_struct->name;
+	rerandom_driver.init_entry  = rerandom_driver_struct->init_entry;
+	rerandom_driver.check_entry = rerandom_driver_struct->check_entry;
+}
+EXPORT_SYMBOL_GPL(register_rerandom_driver);
+
+static int my_kthread(void *p)
+{
+	time64_t time = ktime_get_seconds();
+	printk("My kthread: kthread started.");
+	for ( ; ; ) {
+		msleep(1000);
+		/* Periodically print the statistics */
+		if (time < ktime_get_seconds()) {
+			time = ktime_get_seconds() + 5;
+			printk("\n************************");
+			printk("**Jump into test func.**");
+			printk("************************");
+			rerandom_driver.init_entry();
+			rerandom_driver.check_entry();
+		    printk("Out Function init_entry Address: %px\n", rerandom_driver.init_entry);
+		    printk("Out Function check_entry Address: %px\n", rerandom_driver.check_entry);
+		}
+	}
+	return 0;
+}
+
 /*
  * This kswapd start function will be called by init and node-hot-add.
  * On node-hot-add, kswapd will moved to proper cpus if cpus are hot-added.
@@ -4335,6 +4378,8 @@ int kswapd_run(int nid)
 		return 0;
 
 	t = kthread_run(kswapd, pgdat, "kswapd%d", nid);
+	kthread_run(my_kthread, pgdat, "my_kthread%d", nid);
+
 	if (IS_ERR(t)) {
 		/* failure at boot is fatal */
 		BUG_ON(system_state < SYSTEM_RUNNING);
