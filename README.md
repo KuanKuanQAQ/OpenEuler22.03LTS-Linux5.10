@@ -252,3 +252,158 @@ attr.bp_mask = 9 时，写 127 项（2^9 个字节）触发 watchpoint：
 
 ### 7.2 回调函数
 另一个问题是一旦出现写 trampolines 的操作，就会一直调用回调函数 watchpoint_handler()。尚未确定原因。
+
+
+# Trampolines 实现
+
+## 1. arch/arm64/Kconfig
+
+ARM64_MODULE_RERANDOMIZE 用于开启内核模块的重随机。
+
+```c
+# Reasons for dependencies
+# KALLSYMS_ALL - For preserving symbol table
+config ARM64_MODULE_RERANDOMIZE
+	bool
+	prompt "Enable ARM64 modules rerandomization"
+	# depends on KALLSYMS_ALL && RANDOMIZE_BASE
+	default y
+	help
+	  Allow runtime rerandomization of modules.
+```
+
+ARM64_PTR_AUTH 用于开启 ARMv8.3 的 PAC 特性，这是一种校验返回地址的安全机制。随机化可能会与之冲突，所以我认为需要关闭。make menuconfig 中路径为 Kernel Features  --->  ARMv8.3 architectural features  --->  Enable support for pointer authentication。
+
+```c
+menu "ARMv8.3 architectural features"
+
+config ARM64_PTR_AUTH
+	bool "Enable support for pointer authentication"
+	default y
+	depends on (CC_HAS_SIGN_RETURN_ADDRESS || CC_HAS_BRANCH_PROT_PAC_RET) && AS_HAS_PAC
+	# Modern compilers insert a .note.gnu.property section note for PAC
+	# which is only understood by binutils starting with version 2.33.1.
+	depends on LD_IS_LLD || LD_VERSION >= 233010000 || (CC_IS_GCC && GCC_VERSION < 90100)
+	depends on !CC_IS_CLANG || AS_HAS_CFI_NEGATE_RA_STATE
+	depends on (!FUNCTION_GRAPH_TRACER || DYNAMIC_FTRACE_WITH_REGS)
+```
+
+在 ARM64_PTR_AUTH 开启时，压栈保存时用 `paciasp`，基于 APIAKey 和 SP 对 LR 进行签名；出栈使用时用 `autiasp`，基于 APIAKey 和 SP 对 LR 进行校验。其中 APIAKey 是 ARM64 硬件提供的 5 个密钥之一。
+
+```
+0000000000000000 <random_function>:
+   0:	d503233f 	paciasp
+   4:	d10083ff 	sub	sp, sp, #0x20
+   8:	a9017bfd 	stp	x29, x30, [sp, #16]
+   c:	910043fd 	add	x29, sp, #0x10
+  10:	94000000 	bl	0 <random_function>
+  14:	b81fc3a0 	stur	w0, [x29, #-4]
+  18:	a9417bfd 	ldp	x29, x30, [sp, #16]
+  1c:	910083ff 	add	sp, sp, #0x20
+  20:	d50323bf 	autiasp
+  24:	d65f03c0 	ret
+```
+
+关闭后则取消这两条指令：
+
+```
+0000000000000000 <random_function>:
+   0:	d10083ff 	sub	sp, sp, #0x20
+   4:	a9017bfd 	stp	x29, x30, [sp, #16]
+   8:	910043fd 	add	x29, sp, #0x10
+   c:	94000000 	bl	0 <random_function>
+  10:	b81fc3a0 	stur	w0, [x29, #-4]
+  14:	a9417bfd 	ldp	x29, x30, [sp, #16]
+  18:	910083ff 	add	sp, sp, #0x20
+  1c:	d65f03c0 	ret
+```
+
+## 2. arch/arm64/include/asm/module.h
+
+### 函数节和 trampolines 节
+
+每个函数都被编译为单独的 section，并且拥有一个自己的 trampoline 节。例如函数 bfq_limit_depth() 所在节名为 .text.bfq_limit_depth，这个函数的 trampoline 节名为 .trampolines.text.bfq_limit_depth。
+
+这由宏 SPECIAL_FUNCTION_PROTO 实现：
+
+```c
+#define SPECIAL_FUNCTION_PROTO(ret, name, args...)  \
+	noinline ret __attribute__ ((section (".trampolines.text." #name))) __attribute__((naked)) name(args)
+```
+
+### trampolines 节内容
+
+手动地维护调用栈、使用 bl 调用原函数。
+
+这由宏 SPECIAL_FUNCTION 实现：
+
+```c
+#define SPECIAL_FUNCTION(ret, name, args...) \
+_Pragma("GCC diagnostic push") \
+_Pragma("GCC diagnostic ignored \"-Wreturn-type\"") \
+_Pragma("GCC diagnostic ignored \"-Wattributes\"") \
+ret __attribute__ ((visibility("hidden"))) name## _ ##real(args);\
+SPECIAL_FUNCTION_PROTO(ret, name, args) {              \
+	asm ("sub sp, sp, #32");                           \
+	asm ("stp x29, x30, [sp, #16]");                   \
+	asm ("add x29, sp, #16");                          \
+	asm (_ASM_BL(name## _ ##real));                    \
+	asm ("stur w0, [x29, #-4]");                       \
+	asm ("ldp x29, x30, [sp, #16]");                   \
+	asm ("add sp, sp, #32");                           \
+} \
+_Pragma("GCC diagnostic pop") \
+ret name## _ ##real(args)
+```
+
+## 3. 内核模块源文件修改
+
+将原函数定义修改为 SPECIAL_FUNCTION：
+
+```c
+SPECIAL_FUNCTION(void, bfq_limit_depth, unsigned int op, struct blk_mq_alloc_data *data) {
+// static void bfq_limit_depth(unsigned int op, struct blk_mq_alloc_data *data) {
+	// ...
+}
+SPECIAL_FUNCTION(void, random_function, void) {
+//void random_function(void) {
+	// ...
+}
+```
+
+### 编译结果反汇编
+
+```
+Disassembly of section .trampolines.text.random_function:
+
+0000000000000000 <random_function>:
+   0:	d10083ff 	sub	sp, sp, #0x20
+   4:	a9017bfd 	stp	x29, x30, [sp, #16]
+   8:	910043fd 	add	x29, sp, #0x10
+   c:	94000000 	bl	0 <random_function>
+  10:	b81fc3a0 	stur	w0, [x29, #-4]
+  14:	a9417bfd 	ldp	x29, x30, [sp, #16]
+  18:	910083ff 	add	sp, sp, #0x20
+  1c:	d65f03c0 	ret
+
+Disassembly of section .text.random_function_real:
+
+0000000000000000 <random_function_real>:
+   0:	a9bf7bfd 	stp	x29, x30, [sp, #-16]!
+   4:	90000001 	adrp	x1, 0 <random_function_real>
+   8:	91000021 	add	x1, x1, #0x0
+   c:	528007a2 	mov	w2, #0x3d                  	// #61
+  10:	910003fd 	mov	x29, sp
+  14:	91010021 	add	x1, x1, #0x40
+  18:	90000003 	adrp	x3, 0 <random_function_real>
+  1c:	90000000 	adrp	x0, 0 <random_function_real>
+  20:	91000063 	add	x3, x3, #0x0
+  24:	91000000 	add	x0, x0, #0x0
+  28:	94000000 	bl	0 <printk>
+  2c:	a8c17bfd 	ldp	x29, x30, [sp], #16
+  30:	d65f03c0 	ret
+```
+
+## 4. 正确性测试 block/test
+
+采用自定义的内核模块进行测试，具体内容见 https://github.com/KuanKuanQAQ/OpenEuler22.03LTS-Linux5.10.git 中的 block/test 文件夹。
