@@ -4327,13 +4327,16 @@ unsigned long shrink_all_memory(unsigned long nr_to_reclaim)
 
 char default_name[] = "default_name";
 void empty_func(void) {
-	printk("This is an empty func.");
 	return;
+}
+int empty_check_func(int a, char* c, time64_t time) {
+	printk("This is an empty func.");
+	return 0;
 }
 struct Rerandom_Driver rerandom_driver = {
 	.name = default_name,
 	.init_entry = empty_func,
-	.check_entry = empty_func,
+	.check_entry = empty_check_func,
 };
 
 void register_rerandom_driver(const struct Rerandom_Driver *rerandom_driver_struct) {
@@ -4346,6 +4349,7 @@ EXPORT_SYMBOL_GPL(register_rerandom_driver);
 static int my_kthread(void *p)
 {
 	time64_t time = ktime_get_seconds();
+	int test_ret = -1;
 	printk("My kthread: kthread started.");
 	for ( ; ; ) {
 		msleep(1000);
@@ -4356,7 +4360,8 @@ static int my_kthread(void *p)
 			printk("**Jump into test func.**");
 			printk("************************");
 			rerandom_driver.init_entry();
-			rerandom_driver.check_entry();
+			test_ret = rerandom_driver.check_entry(11, "chifan", time);
+		    printk("test_ret = %d\n", test_ret);
 		    printk("Out Function init_entry Address: %px\n", rerandom_driver.init_entry);
 		    printk("Out Function check_entry Address: %px\n", rerandom_driver.check_entry);
 		}

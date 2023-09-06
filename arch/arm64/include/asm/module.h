@@ -23,6 +23,10 @@ struct mod_arch_specific {
 };
 #endif
 
+void add_pause_list(void);
+
+void remove_pause_list(void);
+
 #ifdef CONFIG_ARM64_MODULE_RERANDOMIZE
 
 #define __FILENAME__ (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
@@ -31,20 +35,31 @@ struct mod_arch_specific {
 #define _ASM_BL(f)		"bl " #f
 
 #define SPECIAL_FUNCTION_PROTO(ret, name, args...)  \
-	noinline ret __attribute__ ((section (".trampolines.text." #name))) __attribute__((naked)) name(args)
+	noinline ret __attribute__ ((section (".trampoline.text." #name))) __attribute__((naked)) name(args)
 #define SPECIAL_FUNCTION(ret, name, args...) \
 _Pragma("GCC diagnostic push") \
 _Pragma("GCC diagnostic ignored \"-Wreturn-type\"") \
 _Pragma("GCC diagnostic ignored \"-Wattributes\"") \
 ret __attribute__ ((visibility("hidden"))) name## _ ##real(args);\
 SPECIAL_FUNCTION_PROTO(ret, name, args) {              \
-	asm ("sub sp, sp, #32");                           \
-	asm ("stp x29, x30, [sp, #16]");                   \
-	asm ("add x29, sp, #16");                          \
+	asm ("sub sp, sp, #80");                           \
+	asm ("stp x29, x30, [sp, #64]");                   \
+	asm ("stp x0, x1, [sp, #48]");                     \
+	asm ("stp x2, x3, [sp, #32]");                     \
+	asm ("stp x4, x5, [sp, #16]");                     \
+	asm ("stp x6, x7, [sp]");                          \
+	asm ("mov x29, sp");                               \
+	asm (_ASM_BL(add_pause_list));                     \
+	asm ("ldp x0, x1, [sp, #48]");                     \
+	asm ("ldp x2, x3, [sp, #32]");                     \
+	asm ("ldp x4, x5, [sp, #16]");                     \
+	asm ("ldp x6, x7, [sp]");                          \
 	asm (_ASM_BL(name## _ ##real));                    \
-	asm ("stur w0, [x29, #-4]");                       \
-	asm ("ldp x29, x30, [sp, #16]");                   \
-	asm ("add sp, sp, #32");                           \
+	asm ("str x0, [sp, #56]");                         \
+	asm (_ASM_BL(remove_pause_list));                  \
+	asm ("ldp x29, x30, [sp, #64]");                   \
+	asm ("ldr x0, [sp, #56]");                         \
+	asm ("add sp, sp, #80");                           \
 } \
 _Pragma("GCC diagnostic pop") \
 ret name## _ ##real(args)

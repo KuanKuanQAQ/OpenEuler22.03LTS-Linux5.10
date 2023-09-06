@@ -46,7 +46,7 @@
 struct Rerandom_Driver {
 	const char		   *name;
 	void (*init_entry)(void);
-	void (*check_entry)(void);
+	int (*check_entry)(int, char*, time64_t);
 };
 
 #define PCI_STATUS_ERROR_BITS (PCI_STATUS_DETECTED_PARITY  | \
