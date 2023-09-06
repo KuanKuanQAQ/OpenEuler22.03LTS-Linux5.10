@@ -1,8 +1,8 @@
-# Watchpoint 示例内核模块
+## 1 Watchpoint 示例内核模块
 
 编写一个在内核中注册 watchpoint 的内核模块，监视某个内存地址，一旦有内核线程对该内存进行写操作则进入 monitor 模式，执行注册的回调函数。
 
-## 1. 注册 watchpoint 内核模块
+### 1.1 注册 watchpoint 内核模块
 
 watchpoint 机制对地址生效，但是本模块输入一个内核符号，再通过 __symbol_get() 获取该内核符号的内存地址，进而对地址进行监视。
 
@@ -54,7 +54,7 @@ static int __init watchpoint_init(void)
 
 注册 watchpoint 内核模块的核心是 register_wide_hw_breakpoint() 函数。开启 CONFIG_HAVE_HW_BREAKPOINT 的情况下，在  <linux/hw_breakpoint.h> 头文件中声明了，register_wide_hw_breakpoint_cpu()，register_wide_hw_breakpoint()，register_perf_hw_breakpoint() 三个用于注册 watchpoint 的函数。其中第一个函数只有声明没有定义。第二个函数是在所有 cpu 上注册监视该内存地址，本内核模块采用第二个函数。
 
-## 2. 定义回调函数
+### 1.2 定义回调函数
 
 回调函数 watchpoint_handler 在 register_wide_hw_breakpoint() 被注册到异常处理程序中。用于产生 watchpoint 异常时调用，本模块的回调函数定义如下：
 
@@ -71,7 +71,7 @@ static void watchpoint_handler(struct perf_event *bp,
 
 其中 dump_stack() 函数用于打印异常发生时的函数调用栈。
 
- ## 3. 启动内核线程修改受监视的内存区域
+### 1.3 启动内核线程修改受监视的内存区域
 
 本实验中被修改的区域为 trampolines，这是一个 u64 数组。watchpoint 禁止对其的任何写操作。
 
@@ -116,7 +116,7 @@ int work_func(void *trampoline)
 	}
 ```
 
-## 4. 定义受监视内核符号
+### 1.4 定义受监视内核符号
 
 在 linux 内核中，可以将一个符号用 EXPORT_SYMBOL 宏导出为内核符号。此处将数组 trampolines 导出：
 
@@ -129,7 +129,8 @@ EXPORT_SYMBOL_GPL(trampolines);
 
 并且这个内核模块必须先于 watchpoint.ko 加载。否则 watchpoint.ko 还是找不到 trampolines 这个符号。
 
-## 5. 对内核的修改
+### 1.5 对内核的修改
+
 在 arm64 架构下，并没有写入 wcr 控制寄存器的 mask 位，这导致 watchpoint 只能在 1-8 个字节的范围内生效。加入 mask 标志位：
 ```c
 // arch/arm64/include/asm/hw_breakpoint.h
@@ -171,7 +172,7 @@ static inline u32 encode_ctrl_reg(struct arch_hw_breakpoint_ctrl ctrl)
 	}
 ```
 
-## 实验记录
+### 1.6 实验记录
 使用不同 mask 的 watchpoint 监视 trampolines 内核符号，此时 watchpoint 的首地址是 trampolines 数组的首地址，监视长度由 mask 决定。从 trampolines 的末端向首端遍历确认 watchpoint 监视的范围。
 
 attr.bp_mask = 11 时，写 511 项（2^11 个字节）触发 watchpoint：
@@ -222,9 +223,9 @@ attr.bp_mask = 9 时，写 127 项（2^9 个字节）触发 watchpoint：
 [    5.485404]  dump_stack+0xd4/0x130
 [    5.486075]  watchpoint_handler+0x30/0x48 [watchpoint]
 ```
-## 7. 问题
+### 1.7 问题
 
-### 7.1 中断处理函数中不允许休眠
+#### 1.7.1 中断处理函数中不允许休眠
 第 3 节中创建的内核线程在两次写 trampolines 之间会睡眠一定时间，这引起了内核错误（删除 msleep 睡眠就不会报错）：
 
 ```
@@ -250,13 +251,15 @@ attr.bp_mask = 9 时，写 127 项（2^9 个字节）触发 watchpoint：
 
 但是这个内核线程为什么会被认为是中断处理函数呢？
 
-### 7.2 回调函数
+#### 1.7.2 回调函数
 另一个问题是一旦出现写 trampolines 的操作，就会一直调用回调函数 watchpoint_handler()。尚未确定原因。
 
 
-# Trampolines 实现
+## 2 生成 trampolines
 
-## 1. arch/arm64/Kconfig
+trampolines 是可重随机函数的固定入口。其不被重随机，从而为内核调用或模块内调用提供接口。
+
+### 2.1 内核编译选项设置
 
 ARM64_MODULE_RERANDOMIZE 用于开启内核模块的重随机。
 
@@ -272,7 +275,7 @@ config ARM64_MODULE_RERANDOMIZE
 	  Allow runtime rerandomization of modules.
 ```
 
-ARM64_PTR_AUTH 用于开启 ARMv8.3 的 PAC 特性，这是一种校验返回地址的安全机制。随机化可能会与之冲突，所以我认为需要关闭。make menuconfig 中路径为 Kernel Features  --->  ARMv8.3 architectural features  --->  Enable support for pointer authentication。
+ARM64_PTR_AUTH 用于开启 ARMv8.3 的 PAC 特性，这是一种校验返回地址的安全机制。随机化可能会与之冲突。make menuconfig 中路径为 Kernel Features  --->  ARMv8.3 architectural features  --->  Enable support for pointer authentication。
 
 ```c
 menu "ARMv8.3 architectural features"
@@ -318,92 +321,226 @@ config ARM64_PTR_AUTH
   1c:	d65f03c0 	ret
 ```
 
-## 2. arch/arm64/include/asm/module.h
+### 2.2 trampolines 表项内容
 
-### 函数节和 trampolines 节
+trampoline 表项内容目前包含：
 
-每个函数都被编译为单独的 section，并且拥有一个自己的 trampoline 节。例如函数 bfq_limit_depth() 所在节名为 .text.bfq_limit_depth，这个函数的 trampoline 节名为 .trampolines.text.bfq_limit_depth。
+1. 构造栈空间，并保存 lr 寄存器的值。
 
-这由宏 SPECIAL_FUNCTION_PROTO 实现：
+2. 在栈中保存函数调用时通过寄存器 x0 到 x7 传入的参数。
 
-```c
-#define SPECIAL_FUNCTION_PROTO(ret, name, args...)  \
-	noinline ret __attribute__ ((section (".trampolines.text." #name))) __attribute__((naked)) name(args)
+3. 使用 bl 指令跳转到 add_pause_list() 函数，获取当前线程 pid，用于重随机时暂停内核线程。
+
+4. 恢复寄存器 x0 至 x7 参数。
+
+5. 使用 bl 指令跳转到目的函数。
+
+6. 在栈中保存目的函数的返回值 x0。
+
+7. 使用 bl 指令跳转到 remove_pause_list() 函数，将当前线程从暂停列表中移除，表示重随机时不再需要暂停该线程。
+
+8. 将目的函数的返回值恢复到 x0 寄存器中。
+
+9. 栈平衡并恢复 lr 寄存器。
+
+函数参数与返回值由寄存器传递。
+
+```
+Disassembly of section .trampolines.text.random_function:
+
+0000000000000000 <random_function>:
+   0:	d10143ff 	sub	sp, sp, #0x50           ;开辟栈空间
+   4:	a9047bfd 	stp	x29, x30, [sp, #64]     ;保存fp和lr寄存器
+   8:	a90307e0 	stp	x0, x1, [sp, #48]       ;保存x0-x7参数寄存器
+   c:	a9020fe2 	stp	x2, x3, [sp, #32]
+  10:	a90117e4 	stp	x4, x5, [sp, #16]
+  14:	a9001fe6 	stp	x6, x7, [sp]
+  18:	910003fd 	mov	x29, sp                 ;将fp更新为sp
+  1c:	94000000 	bl	0 <add_pause_list>      ;跳转至add_pause_list函数
+  20:	a94307e0 	ldp	x0, x1, [sp, #48]       ;返回后恢复x0-x7参数寄存器
+  24:	a9420fe2 	ldp	x2, x3, [sp, #32]
+  28:	a94117e4 	ldp	x4, x5, [sp, #16]
+  2c:	a9401fe6 	ldp	x6, x7, [sp]
+  30:	94000000 	bl	0 <random_function>     ;跳转至random_function
+  34:	f9001fe0 	str	x0, [sp, #56]           ;保存返回值寄存器x0
+  38:	94000000 	bl	0 <remove_pause_list>   ;跳转至remove_pause_list函数
+  3c:	a9447bfd 	ldp	x29, x30, [sp, #64]     ;读取最开始保存的fp和lr寄存器
+  40:	f9401fe0 	ldr	x0, [sp, #56]           ;读取x0寄存器，恢复返回值
+  44:	910143ff 	add	sp, sp, #0x50           ;恢复sp寄存器，完成栈平衡
+  48:	d65f03c0 	ret
 ```
 
-### trampolines 节内容
+### 2.3 重定位相关信息
 
-手动地维护调用栈、使用 bl 调用原函数。
+bl 指令跳转目的地址在重随机时由重定位表项计算。每个 trampoline 表项拥有自己的重定位表，内容为：
 
-这由宏 SPECIAL_FUNCTION 实现：
+```
+RELOCATION RECORDS FOR [.trampolines.text.random_function]:
+OFFSET           TYPE              VALUE 
+000000000000001c R_AARCH64_CALL26  add_pause_list
+0000000000000030 R_AARCH64_CALL26  random_function_real
+0000000000000038 R_AARCH64_CALL26  remove_pause_list
+```
+
+其中记载了 bl 指令在 trampoline 中的偏移 offset，重定位类型 type 以及重定位目的地址的符号 value。在编译时修改符号表内容，将原函数的符号定义位置改为 trampoline 表项位置，并新增可重随机函数的符号定义位置，内容为：
+
+```
+SYMBOL TABLE:
+OFFSET					 TYPE SECTION                           SIZE             VIS     NAME
+0000000000000000 F    .trampoline.text.random_function	0000000000000020         random_function
+0000000000000000 F    .text.random_function_real	      0000000000000034 .hidden random_function_real
+```
+
+### 2.4 函数节
+
+基于 -ffunction-sections 这一编译选项进行编译，每个函数的代码段均单独为一个 section。在此基础上，为每个函数节增加一个 trampoline 节。内核范围内所有对本函数的调用均指向本函数的 trampoline，再由 trampoline 跳转到函数的原代码段。
+
+以 random_function 函数为例。由于符号表的修改，所有对 random_function 的调用均指向 trampoline 节 .trampolines.text.random_function。该节内的 bl 指令目的符号为 random_funciton_real，为重定位符号。在重随机过程中，根据重定表和符号表中的内容更新目的地址。
+
+**模块补丁实现**
+
+原函数：
 
 ```c
+SPECIAL_FUNCTION(void, random_function, void) {
+// void random_function(void) {
+    printk("%s %d random function addr:%lx\n", __FUNCTION__, __LINE__, &random_function);
+}
+```
+
+宏定义：
+
+```c
+#define _ASM_BL(f)		"bl " #f
+
+#define SPECIAL_FUNCTION_PROTO(ret, name, args...)  \
+	noinline ret __attribute__ ((section (".trampoline.text." #name))) __attribute__((naked)) name(args)
 #define SPECIAL_FUNCTION(ret, name, args...) \
 _Pragma("GCC diagnostic push") \
 _Pragma("GCC diagnostic ignored \"-Wreturn-type\"") \
 _Pragma("GCC diagnostic ignored \"-Wattributes\"") \
 ret __attribute__ ((visibility("hidden"))) name## _ ##real(args);\
 SPECIAL_FUNCTION_PROTO(ret, name, args) {              \
-	asm ("sub sp, sp, #32");                           \
-	asm ("stp x29, x30, [sp, #16]");                   \
-	asm ("add x29, sp, #16");                          \
+	asm ("sub sp, sp, #80");                           \
+	asm ("stp x29, x30, [sp, #64]");                   \
+	asm ("stp x0, x1, [sp, #48]");                     \
+	asm ("stp x2, x3, [sp, #32]");                     \
+	asm ("stp x4, x5, [sp, #16]");                     \
+	asm ("stp x6, x7, [sp]");                          \
+	asm ("mov x29, sp");                               \
+	asm (_ASM_BL(add_pause_list));                     \
+	asm ("ldp x0, x1, [sp, #48]");                     \
+	asm ("ldp x2, x3, [sp, #32]");                     \
+	asm ("ldp x4, x5, [sp, #16]");                     \
+	asm ("ldp x6, x7, [sp]");                          \
 	asm (_ASM_BL(name## _ ##real));                    \
-	asm ("stur w0, [x29, #-4]");                       \
-	asm ("ldp x29, x30, [sp, #16]");                   \
-	asm ("add sp, sp, #32");                           \
+	asm ("str x0, [sp, #56]");                         \
+	asm (_ASM_BL(remove_pause_list));                  \
+	asm ("ldp x29, x30, [sp, #64]");                   \
+	asm ("ldr x0, [sp, #56]");                         \
+	asm ("add sp, sp, #80");                           \
 } \
 _Pragma("GCC diagnostic pop") \
 ret name## _ ##real(args)
 ```
 
-## 3. 内核模块源文件修改
+## 3 测试内核模块
 
-将原函数定义修改为 SPECIAL_FUNCTION：
+不直接在 bfq.ko 进行测试有三个原因：
+
+1. bfq 函数众多，不便手动加宏。
+2. 不容易验证 bfq 模块正常运行。
+3. bfq 中不一定包含了所有待测试情景。
+
+因此我使用了之前测试代码引用编写过的内核模块 test_dirver，该内核模块放在了 block/test 中。
+
+这一内核模块的 init 部分如下：
 
 ```c
-SPECIAL_FUNCTION(void, bfq_limit_depth, unsigned int op, struct blk_mq_alloc_data *data) {
-// static void bfq_limit_depth(unsigned int op, struct blk_mq_alloc_data *data) {
-	// ...
+/* --------- block/test/test_driver.c:135 ---------*/
+struct Rerandom_Driver rerandom_driver_struct = {
+};
+
+extern void register_rerandom_driver(struct Rerandom_Driver* driver);
+static int __init random_test_driver_init(void) {
+    rerandom_driver_struct.name = "rerandom_test";
+    rerandom_driver_struct.init_entry = &init_entry;
+    rerandom_driver_struct.check_entry = &check_entry;
+
+    register_rerandom_driver(&rerandom_driver_struct);
+    return 0;
 }
-SPECIAL_FUNCTION(void, random_function, void) {
-//void random_function(void) {
-	// ...
+module_init(random_test_driver_init);
+```
+
+其中 `struct Rerandom_Driver` 是一个**新增的**定义在内核中的结构体，在 test_driver 的初始化部分被实例化为一个“局部变量”（虽然是该文件中的全局变量，但其实是弱符号，把它的定义写进 init 函数成为真正的局部变量也是一样的）。这一结构体有如下定义：
+
+```c
+/* --------- include/linux/pci.h:46 ---------*/
+struct Rerandom_Driver {
+	const char		   *name;
+	void (*init_entry)(void);
+	int (*check_entry)(int, char*, time64_t);
+};
+```
+
+可以看到 `struct Rerandom_Driver` 中包含了两个函数指针 init_entry 和 check_entry。这两个函数指针在 test_driver 的初始化函数中被初始化了。接着，random_test_driver_init 调用了一个外部函数 register_rerandom_driver，这个外部函数负责使用传入参数为全局变量 rerandom_driver 赋值。
+
+```c
+/* --------- mm/vmscan:4336 ---------*/
+struct Rerandom_Driver rerandom_driver = {
+	.name = default_name,
+	.init_entry = empty_func,
+	.check_entry = empty_check_func,
+};
+
+void register_rerandom_driver(const struct Rerandom_Driver *rerandom_driver_struct) {
+	rerandom_driver.name        = rerandom_driver_struct->name;
+	rerandom_driver.init_entry  = rerandom_driver_struct->init_entry;
+	rerandom_driver.check_entry = rerandom_driver_struct->check_entry;
+}
+EXPORT_SYMBOL_GPL(register_rerandom_driver);
+```
+
+这部分代码模拟了驱动模块向内核结构体挂载接口的过程。挂载完成后，我使用了一个内核线程不断运行这些挂在的函数：
+
+```c
+/* --------- mm/vmscan:4349 ---------*/
+static int my_kthread(void *p)
+{
+	time64_t time = ktime_get_seconds();
+	int test_ret = -1;
+	printk("My kthread: kthread started.");
+	for ( ; ; ) {
+		msleep(1000);
+		/* Periodically print the statistics */
+		if (time < ktime_get_seconds()) {
+			time = ktime_get_seconds() + 5;
+			printk("\n************************");
+			printk("**Jump into test func.**");
+			printk("************************");
+			rerandom_driver.init_entry();
+			test_ret = rerandom_driver.check_entry(11, "chifan", time);
+		    printk("test_ret = %d\n", test_ret);
+		    printk("Out Function init_entry Address: %px\n", rerandom_driver.init_entry);
+		    printk("Out Function check_entry Address: %px\n", rerandom_driver.check_entry);
+		}
+	}
+	return 0;
 }
 ```
 
-### 编译结果反汇编
+这个内核线程会随 vmscan 启动的 kswapd 线程一起启动，可以认为它始终在内核中运行。挂载之前，rerandom_driver 结构体中的函数指针指向两个默认函数：
 
-```
-Disassembly of section .trampolines.text.random_function:
-
-0000000000000000 <random_function>:
-   0:	d10083ff 	sub	sp, sp, #0x20
-   4:	a9017bfd 	stp	x29, x30, [sp, #16]
-   8:	910043fd 	add	x29, sp, #0x10
-   c:	94000000 	bl	0 <random_function>
-  10:	b81fc3a0 	stur	w0, [x29, #-4]
-  14:	a9417bfd 	ldp	x29, x30, [sp, #16]
-  18:	910083ff 	add	sp, sp, #0x20
-  1c:	d65f03c0 	ret
-
-Disassembly of section .text.random_function_real:
-
-0000000000000000 <random_function_real>:
-   0:	a9bf7bfd 	stp	x29, x30, [sp, #-16]!
-   4:	90000001 	adrp	x1, 0 <random_function_real>
-   8:	91000021 	add	x1, x1, #0x0
-   c:	528007a2 	mov	w2, #0x3d                  	// #61
-  10:	910003fd 	mov	x29, sp
-  14:	91010021 	add	x1, x1, #0x40
-  18:	90000003 	adrp	x3, 0 <random_function_real>
-  1c:	90000000 	adrp	x0, 0 <random_function_real>
-  20:	91000063 	add	x3, x3, #0x0
-  24:	91000000 	add	x0, x0, #0x0
-  28:	94000000 	bl	0 <printk>
-  2c:	a8c17bfd 	ldp	x29, x30, [sp], #16
-  30:	d65f03c0 	ret
+```c
+char default_name[] = "default_name";
+void empty_func(void) {
+	return;
+}
+int empty_check_func(int a, char* c, time64_t time) {
+	printk("This is an empty func.");
+	return 0;
+}
 ```
 
-## 4. 正确性测试 block/test
-
-采用自定义的内核模块进行测试，具体内容见 https://github.com/KuanKuanQAQ/OpenEuler22.03LTS-Linux5.10.git 中的 block/test 文件夹。
+初始化了 test_driver 内核模块后，这两个函数就会被更新为 test_driver.c 中定义的函数。
