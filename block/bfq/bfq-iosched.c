@@ -133,6 +133,14 @@
 
 #include "bfq-iosched.h"
 
+void add_pause_list() {
+    return;
+}
+
+void remove_pause_list() {
+    return;
+}
+
 #define BFQ_BFQQ_FNS(name)						\
 void bfq_mark_bfqq_##name(struct bfq_queue *bfqq)			\
 {									\

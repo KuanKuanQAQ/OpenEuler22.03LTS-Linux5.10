@@ -18,10 +18,8 @@ void remove_pause_list() {
 
 
 // 变量
-//SPECIAL_VAR(int* global_data_pointer);
 int* global_data_pointer;
 int global_data = 11; // 数据段的数据
-// SPECIAL_VAR(int global_data) = 11; // 数据段的数据
 
 // 函数指针
 //SPECIAL_VAR(void (*global_function_pointer)(void));
@@ -48,6 +46,7 @@ SPECIAL_FUNCTION(void, local_random_data_pointer, void) {
 extern int kswapd_run(int nid);
 SPECIAL_FUNCTION(void, global_random_data_pointer, void) {
 // void global_random_data_pointer(void) {
+    printk("xx here i am xx");
     global_data_pointer = &global_data;
 
     // 等待随机化然后查看内容
@@ -107,10 +106,10 @@ SPECIAL_FUNCTION(void, init_entry, void){
 //void init_entry(void) {
     printk("**************** init_entry ******************");
     local_random_data_pointer();
-    global_random_data_pointer();
+    // global_random_data_pointer();
 
     local_random_function_pointer();
-    global_random_function_pointer();
+    // global_random_function_pointer();
     printk("***************** init_entry end *****************");
 }
 
