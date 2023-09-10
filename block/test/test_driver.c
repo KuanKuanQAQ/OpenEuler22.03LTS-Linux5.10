@@ -37,7 +37,9 @@ SPECIAL_FUNCTION(void, local_random_data_pointer, void) {
 // void local_random_data_pointer(void) {
     int local_data = 10;  // 数据变量
     int* local_pointer =  &local_data; // 指向数据的指针
-
+    
+    printk("%s %d local_pinter value: %lx local_pointer_addr: %lx value: %d\n", 
+        __FUNCTION__, __LINE__, local_pointer, &local_pointer, *local_pointer);
     // 通过栈传递指针，查看随机化后内容
     local_random_data_pointer_call(local_pointer);
 }
@@ -46,7 +48,6 @@ SPECIAL_FUNCTION(void, local_random_data_pointer, void) {
 extern int kswapd_run(int nid);
 SPECIAL_FUNCTION(void, global_random_data_pointer, void) {
 // void global_random_data_pointer(void) {
-    printk("xx here i am xx");
     global_data_pointer = &global_data;
 
     // 等待随机化然后查看内容
@@ -106,10 +107,10 @@ SPECIAL_FUNCTION(void, init_entry, void){
 //void init_entry(void) {
     printk("**************** init_entry ******************");
     local_random_data_pointer();
-    // global_random_data_pointer();
+    global_random_data_pointer();
 
     local_random_function_pointer();
-    // global_random_function_pointer();
+    global_random_function_pointer();
     printk("***************** init_entry end *****************");
 }
 
