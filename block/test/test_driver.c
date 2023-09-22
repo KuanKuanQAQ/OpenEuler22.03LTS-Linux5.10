@@ -152,3 +152,4 @@ module_exit(random_test_driver_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_INFO(randomizable, "Y");
+MODULE_INFO(shuffle, "1");
